@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>4階部室 予約状況</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", sans-serif; background: #f0f2f5; margin: 0; padding: 8px; }
+    .container { width: 100%; max-width: 800px; margin: 0 auto; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    h1 { text-align: center; color: #333; margin: 5px 0; font-size: 1.2rem; }
+    p.sub-title { text-align: center; color: #666; margin: 0 0 10px 0; font-size: 0.7rem; }
+    
+    /* コントロールバー */
+    .control-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 6px; background: #eef2f5; border-radius: 6px; }
+    .week-tabs { display: flex; gap: 4px; }
+    .tab-btn { border: 1px solid #007bff; background: white; color: #007bff; padding: 8px 10px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; cursor: pointer; display: inline-block; }
+    .tab-btn.active { background: #007bff; color: white; }
+    .btn-reset { background-color: #dc3545; color: white; border: none; padding: 8px 10px; border-radius: 4px; font-weight: bold; font-size: 0.8rem; cursor: pointer; }
+
+    /* タイムテーブルのスタイル */
+    .table-container { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    table { width: 100%; border-collapse: collapse; min-width: 500px; table-layout: fixed; }
+    th, td { border: 1px solid #ccc; text-align: center; vertical-align: middle; padding: 4px 2px; }
+    th { background-color: #007bff; color: white; font-size: 0.75rem; height: 32px; }
+    
+    /* 時間列 */
+    .time-col { background-color: #f8f9fa; width: 110px; text-align: left; padding: 4px; font-size: 0.65rem; line-height: 1.2; }
+    .time-col strong { display: block; font-size: 0.75rem; color: #007bff; margin-bottom: 2px; border-bottom: 1px solid #ddd; }
+    .time-col div { color: #444; }
+    
+    /* 予約セル（タップしやすく大きめサイズ） */
+    .slot { cursor: pointer; font-weight: bold; height: 52px; font-size: 0.75rem; user-select: none; }
+    .slot.empty { background-color: #e6f4ea; color: #1e7e34; }
+    .slot.empty:active { background-color: #ceebd6; }
+    .slot.reserved { background-color: #fbe9e7; color: #d93025; }
+    .slot.reserved:active { background-color: #f5c6cb; }
+    .slot small { font-size: 0.6rem; font-weight: normal; display: block; word-break: break-all; margin-top: 2px; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>4階部室 予約状況</h1>
+  <p class="sub-title">日曜23:59自動繰り越し</p>
+
+  <div class="control-bar">
+    <div class="week-tabs">
+      <button type="button" class="tab-btn active" id="btnThisWeek" onclick="switchWeek('this')">◀ 今週</button>
+      <button type="button" class="tab-btn" id="btnNextWeek" onclick="switchWeek('next')">来週 ▶</button>
+    </div>
+    <button type="button" class="btn-reset" onclick="manualReset()">⚙️ リセット</button>
+  </div>
+
+  <div class="table-container">
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 110px;">時間割</th>
+          <th>月</th>
+          <th>火</th>
+          <th>水</th>
+          <th>木</th>
+          <th>金</th>
+          <th>土</th>
+          <th>日</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        <!-- JSで作成 -->
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const timeSlots = [
+    { name: "コマ1", times: "A:15:30-16:15<br>B:15:00-15:50<br>AM:12:00-13:00<br>長期:10:00-11:00" },
+    { name: "コマ2", times: "A:16:15-17:00<br>B:15:50-16:40<br>AM:13:00-14:00<br>長期:11:00-12:00" },
+    { name: "コマ3", times: "A:17:00-17:45<br>B:16:40-17:30<br>AM:14:00-15:00<br>長期:12:00-13:00" },
+    { name: "コマ4", times: "A:17:45-18:30<br>B:17:30-18:20<br>AM:15:00-16:00<br>長期:13:00-14:00" },
+    { name: "コマ5", times: "A:18:30-19:15<br>B:18:20-19:10<br>AM:16:00-17:00<br>長期:14:00-15:00" }
+  ];
+
+  const RESET_HOUR = 23;
+  const RESET_MINUTE = 59;
+  const days = ["月", "火", "水", "木", "金", "土", "日"];
+  const ADMIN_PASSWORD = "admin";
+
+  let currentTab = 'this';
+
+  function getBaseWeekNumber() {
+    const now = new Date();
+    const day = now.getDay();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+
+    if (day === 0 && (hour > RESET_HOUR || (hour === RESET_HOUR && minute >= RESET_MINUTE))) {
+      now.setDate(now.getDate() + 1);
+    }
+
+    const d = new Date(now.valueOf());
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+    const yearStart = new Date(d.getFullYear(), 0, 1);
+    const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+    return d.getFullYear() * 100 + weekNo;
+  }
+
+  function getWeekKey(weekOffset) {
+    const base = getBaseWeekNumber();
+    return `yoyaku_data_${base + (weekOffset || 0)}`;
+  }
+
+  function loadReservations(weekKey) {
+    try {
+      const saved = localStorage.getItem(weekKey);
+      return saved ? JSON.parse(saved) : {};
+    } catch(e) {
+      return {};
+    }
+  }
+
+  function saveReservations(weekKey, data) {
+    try {
+      localStorage.setItem(weekKey, JSON.stringify(data));
+    } catch(e) {}
+  }
+
+  function switchWeek(tab) {
+    currentTab = tab;
+    document.getElementById('btnThisWeek').className = `tab-btn ${tab === 'this' ? 'active' : ''}`;
+    document.getElementById('btnNextWeek').className = `tab-btn ${tab === 'next' ? 'active' : ''}`;
+    renderTable();
+  }
+
+  function renderTable() {
+    const weekOffset = currentTab === 'this' ? 0 : 1;
+    const weekKey = getWeekKey(weekOffset);
+    const reservations = loadReservations(weekKey);
+
+    const tbody = document.getElementById('tableBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    timeSlots.forEach((slot, slotIndex) => {
+      const tr = document.createElement('tr');
+      
+      const tdTime = document.createElement('td');
+      tdTime.className = 'time-col';
+      tdTime.innerHTML = `<strong>${slot.name}</strong><div>${slot.times}</div>`;
+      tr.appendChild(tdTime);
+
+      days.forEach((day, dayIndex) => {
+        const td = document.createElement('td');
+        const slotKey = `${dayIndex}-${slotIndex}`;
+        const bandName = reservations[slotKey];
+        const isReserved = Boolean(bandName);
+
+        td.className = `slot ${isReserved ? 'reserved' : 'empty'}`;
+        td.innerHTML = isReserved 
+          ? `❌<small>(${bandName})</small>` 
+          : `⭕`;
+
+        // スマホでのタップ反応を保証するためのアクション定義
+        td.onclick = function() {
+          handleSlotClick(weekKey, reservations, slotKey, day, slot.name, bandName);
+        };
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  function handleSlotClick(weekKey, reservations, slotKey, day, slotName, currentBand) {
+    const weekName = currentTab === 'this' ? '今週' : '来週';
+
+    if (currentBand) {
+      if (confirm(`【${weekName}】${day}曜日の${slotName}（${currentBand}）の予約をキャンセルしますか？`)) {
+        delete reservations[slotKey];
+        saveReservations(weekKey, reservations);
+        renderTable();
+      }
+    } else {
+      const name = prompt(`【${weekName}】${day}曜日の${slotName}を予約します。\nバンド名を入力してください:`);
+      if (name && name.trim() !== "") {
+        reservations[slotKey] = name.trim();
+        saveReservations(weekKey, reservations);
+        renderTable();
+      }
+    }
+  }
+
+  function manualReset() {
+    const pass = prompt("管理者パスワードを入力してください:");
+    if (pass === ADMIN_PASSWORD) {
+      const weekName = currentTab === 'this' ? '今週' : '来週';
+      if (confirm(`本当に【${weekName}】のすべての予約をリセットしますか？`)) {
+        const weekKey = getWeekKey(currentTab === 'this' ? 0 : 1);
+        saveReservations(weekKey, {});
+        renderTable();
+        alert(`【${weekName}】の予約をリセットしました。`);
+      }
+    } else if (pass !== null) {
+      alert("パスワードが違います。");
+    }
+  }
+
+  // 画面ロード完了時に描画実行
+  window.onload = function() {
+    renderTable();
+  };
+</script>
+
+</body>
+</html>
